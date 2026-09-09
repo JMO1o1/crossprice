@@ -17,8 +17,9 @@ def crr_price(
     kind: OptionKind = "call",
     *,
     steps: int = 200,
+    american: bool = False,
 ) -> float:
-    """Return a European CRR price for scalar contract inputs.
+    """Return a European or American CRR price for scalar contract inputs.
 
     Parameter units and kind follow bsm_price. This method independently prices
     the lattice; it never calls the analytic price. Each layer is vectorised,
@@ -26,8 +27,11 @@ def crr_price(
     and strike positive, tau and vol non-negative, and steps a positive integer
     (not a bool). Array contracts are not supported.
 
-    At expiry return the payoff; at zero volatility use deterministic discounted
-    value. Otherwise the CRR probability must lie strictly between zero and one.
+    American exercise is allowed at every lattice date, including time zero;
+    increasing steps refines this approximation to continuous exercise. At zero
+    volatility the American branch maximises discounted payoff over those same
+    dates, including possible interior optima. At expiry return the payoff.
+    Otherwise the CRR probability must lie strictly between zero and one.
     Invalid inputs or probabilities raise ValueError; increase steps when a
     coarse grid cannot represent the drift. Probabilities are never clipped.
     Intermediates outside float64's range raise FloatingPointError.
@@ -43,11 +47,17 @@ def crr_price(
         raise ValueError("kind must be 'call' or 'put'")
     if isinstance(steps, (bool, np.bool_)) or not isinstance(steps, (int, np.integer)) or steps < 1:
         raise ValueError("steps must be a positive integer")
+    if not isinstance(american, (bool, np.bool_)):
+        raise ValueError("american must be a boolean")
     direction = 1.0 if kind == "call" else -1.0
     if tau == 0:
         return max(direction * (spot - strike), 0.0)
     with np.errstate(over="raise", invalid="raise", divide="raise"):
         if vol == 0:
+            if american:
+                dates = np.linspace(0.0, tau, steps + 1)
+                payoffs = direction * (spot * np.exp(-div * dates) - strike * np.exp(-rate * dates))
+                return float(max(np.max(payoffs), 0))
             return float(
                 max(direction * (spot * np.exp(-div * tau) - strike * np.exp(-rate * tau)), 0)
             )
@@ -64,6 +74,9 @@ def crr_price(
         discount = np.exp(-rate * dt)
         terminal = spot * np.exp(jump * (2 * np.arange(steps + 1) - steps))
         values = np.maximum(direction * (terminal - strike), 0.0)
-        for _remaining in range(steps, 0, -1):
+        for remaining in range(steps, 0, -1):
             values = discount * ((1 - probability) * values[:-1] + probability * values[1:])
+            if american:
+                node_spots = spot * np.exp(jump * (2 * np.arange(remaining) - (remaining - 1)))
+                values = np.maximum(values, direction * (node_spots - strike))
     return float(values[0])
