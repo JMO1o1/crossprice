@@ -7,7 +7,7 @@ import pytest
 from numpy.testing import assert_allclose
 from scipy.stats import binom, norm
 
-from crossprice.analytic import OptionKind, bsm_price
+from crossprice.analytic import FloatArray, OptionKind, bsm_price
 from crossprice.montecarlo import MCResult, mc_price
 
 
@@ -180,3 +180,318 @@ def test_invalid_mc_contract_inputs(index: int, value: float) -> None:
     inputs[index] = value
     with pytest.raises(ValueError):
         mc_price(*inputs, seed=17)
+
+
+def _replay_reduction_samples(
+    seed: int | np.random.SeedSequence, n_paths: int, antithetic: bool, kind: OptionKind = "call"
+) -> tuple[FloatArray, FloatArray]:
+    normals = np.random.default_rng(seed).standard_normal(n_paths // 2 if antithetic else n_paths)
+    normals = np.stack([normals, -normals]) if antithetic else normals[None, :]
+    discounted_terminal = 100 * np.exp(-0.02 - 0.5 * 0.2**2 + 0.2 * normals)
+    direction = 1 if kind == "call" else -1
+    return np.maximum(
+        direction * (discounted_terminal - 100 * np.exp(-0.05)), 0
+    ), discounted_terminal
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+def test_antithetic_se_uses_independent_pairs(kind: OptionKind) -> None:
+    seed, n_paths = 67, 10_000
+    result = mc_price(
+        100, 100, 1, 0.05, 0.2, 0.02, kind, seed=seed, n_paths=n_paths, antithetic=True
+    )
+    raw_payoffs, _controls = _replay_reduction_samples(seed, n_paths, True, kind)
+    pairs = np.mean(raw_payoffs, axis=0)
+    assert_allclose(result.price, np.mean(pairs), rtol=0, atol=1e-13)
+    assert_allclose(result.se, np.std(pairs, ddof=1) / np.sqrt(n_paths // 2), rtol=0, atol=1e-13)
+    assert result.n_samples == n_paths // 2
+    assert result.n_paths == result.total_paths == n_paths
+    assert result.antithetic
+    assert not result.control_variate
+
+
+@pytest.mark.parametrize("antithetic", [False, True])
+def test_control_coefficient_and_se_use_independent_pilot(antithetic: bool) -> None:
+    seed, n_paths, pilot_paths = 71, 4096, 1024
+    result = mc_price(
+        100,
+        100,
+        1,
+        0.05,
+        0.2,
+        0.02,
+        seed=seed,
+        n_paths=n_paths,
+        antithetic=antithetic,
+        control_variate=True,
+        pilot_paths=pilot_paths,
+    )
+    raw_payoffs, raw_controls = _replay_reduction_samples(seed, n_paths, antithetic)
+    pilot_payoffs, pilot_controls = _replay_reduction_samples(
+        np.random.SeedSequence(seed, spawn_key=(1,)), pilot_paths, antithetic
+    )
+    pilot_payoff_mean, pilot_control_mean = (
+        np.mean(pilot_payoffs, axis=0),
+        np.mean(pilot_controls, axis=0),
+    )
+    beta = np.cov(pilot_control_mean, pilot_payoff_mean, ddof=1)[0, 1] / np.var(
+        pilot_control_mean, ddof=1
+    )
+    expected = np.mean(raw_payoffs, axis=0) - beta * (
+        np.mean(raw_controls, axis=0) - 100 * np.exp(-0.02)
+    )
+    baseline_se = np.sqrt(np.mean(np.var(raw_payoffs, axis=1, ddof=1)) / (n_paths + pilot_paths))
+    assert_allclose(result.control_beta, beta, rtol=0, atol=1e-12)
+    assert_allclose(result.price, np.mean(expected), rtol=0, atol=1e-12)
+    assert_allclose(
+        result.se, np.std(expected, ddof=1) / np.sqrt(expected.size), rtol=0, atol=1e-13
+    )
+    assert_allclose(result.baseline_se, baseline_se, rtol=0, atol=1e-13)
+    assert result.variance_reduction == pytest.approx((baseline_se / result.se) ** 2, rel=1e-11)
+    assert result.total_paths == n_paths + pilot_paths
+    assert result.pilot_paths == pilot_paths
+    assert result.control_variate
+
+
+@pytest.mark.parametrize(
+    "antithetic,control_variate",
+    [(True, False), (False, True), (True, True)],
+    ids=["antithetic", "control", "both"],
+)
+def test_variance_reduction_at_equal_total_cost(antithetic: bool, control_variate: bool) -> None:
+    result = mc_price(
+        100,
+        100,
+        1,
+        0.05,
+        0.2,
+        0.02,
+        seed=20260913,
+        n_paths=65536,
+        antithetic=antithetic,
+        control_variate=control_variate,
+        pilot_paths=4096,
+    )
+    baseline = mc_price(100, 100, 1, 0.05, 0.2, 0.02, seed=20260913, n_paths=result.total_paths)
+    assert result.se < baseline.se
+    assert result.variance_reduction > 1
+    assert result == mc_price(
+        100,
+        100,
+        1,
+        0.05,
+        0.2,
+        0.02,
+        seed=20260913,
+        n_paths=65536,
+        antithetic=antithetic,
+        control_variate=control_variate,
+        pilot_paths=4096,
+    )
+    print(
+        f"reduction anti={antithetic}, control={control_variate}: {result}; "
+        f"plain-MC SE at total cost={baseline.se:.12f}"
+    )
+
+
+@pytest.mark.parametrize(
+    "antithetic,control_variate",
+    [(True, False), (False, True), (True, True)],
+    ids=["antithetic", "control", "both"],
+)
+@pytest.mark.parametrize("kind", ["call", "put"])
+def test_reduction_coverage_and_empirical_variance(
+    antithetic: bool, control_variate: bool, kind: OptionKind
+) -> None:
+    repetitions, n_paths, pilot_paths = 200, 8192, 2048
+    reference = bsm_price(100, 100, 1, 0.05, 0.2, 0.02, kind)
+    results, baselines = [], []
+    for seed in range(repetitions):
+        result = mc_price(
+            100,
+            100,
+            1,
+            0.05,
+            0.2,
+            0.02,
+            kind,
+            seed=seed,
+            n_paths=n_paths,
+            antithetic=antithetic,
+            control_variate=control_variate,
+            pilot_paths=pilot_paths,
+        )
+        results.append(result)
+        baselines.append(
+            mc_price(
+                100, 100, 1, 0.05, 0.2, 0.02, kind, seed=seed, n_paths=result.total_paths
+            ).price
+        )
+    estimates = np.array([result.price for result in results])
+    covered = sum(result.ci_low <= reference <= result.ci_high for result in results)
+    lower, upper = binom.interval(1 - 0.01 / 6, repetitions, 0.95)
+    factor = np.var(baselines, ddof=1) / np.var(estimates, ddof=1)
+    calibration = np.std(estimates, ddof=1) / np.mean([result.se for result in results])
+    assert lower <= covered <= upper
+    assert factor > 1.2
+    assert 0.75 < calibration < 1.25
+    print(
+        f"{kind} anti={antithetic}, control={control_variate}: coverage={covered}/200 "
+        f"in [{lower:.0f},{upper:.0f}], empirical equal-cost VR={factor:.6f}, "
+        f"SD/SE={calibration:.6f}"
+    )
+
+
+@pytest.mark.parametrize("antithetic", [False, True])
+def test_common_sample_control_parity(antithetic: bool) -> None:
+    call = mc_price(
+        100,
+        100,
+        1,
+        0.05,
+        0.2,
+        0.02,
+        "call",
+        seed=31,
+        n_paths=8192,
+        antithetic=antithetic,
+        control_variate=True,
+        pilot_paths=2048,
+    )
+    put = mc_price(
+        100,
+        100,
+        1,
+        0.05,
+        0.2,
+        0.02,
+        "put",
+        seed=31,
+        n_paths=8192,
+        antithetic=antithetic,
+        control_variate=True,
+        pilot_paths=2048,
+    )
+    assert_allclose(call.control_beta - put.control_beta, 1, rtol=0, atol=1e-12)
+    assert_allclose(
+        call.price - put.price, 100 * np.exp(-0.02) - 100 * np.exp(-0.05), rtol=0, atol=3e-12
+    )
+    assert_allclose(call.se, put.se, rtol=0, atol=1e-12)
+
+
+def test_antithetic_helps_little_for_rare_payoffs() -> None:
+    result = mc_price(100, 160, 1, 0.05, 0.2, 0.02, seed=20260913, n_paths=100_000, antithetic=True)
+    assert 1 <= result.variance_reduction < 1.05
+    print(f"rare payoff antithetic: {result}")
+
+
+def test_uninformative_pilot_can_cost_paths_without_helping() -> None:
+    result = mc_price(
+        100, 160, 1, 0.05, 0.2, 0.02, seed=91, n_paths=16384, control_variate=True, pilot_paths=2
+    )
+    assert result.control_beta == 0
+    assert result.variance_reduction < 1
+    print(f"uninformative pilot: {result}")
+
+
+def test_constant_pilot_control_disables_correction() -> None:
+    with pytest.warns(RuntimeWarning, match="degenerate"):
+        result = mc_price(
+            100, 90, 1, 0.05, 1e-300, seed=1, n_paths=100, control_variate=True, pilot_paths=100
+        )
+    assert result.control_beta == 0
+    assert result.variance_reduction is None
+    assert result.ci_status == "degenerate"
+
+
+@pytest.mark.parametrize("scale", [1e-200, 1e200])
+def test_control_statistics_are_currency_scale_invariant(scale: float) -> None:
+    baseline = mc_price(
+        100,
+        100,
+        1,
+        0.05,
+        0.2,
+        seed=43,
+        n_paths=2000,
+        antithetic=True,
+        control_variate=True,
+        pilot_paths=512,
+    )
+    result = mc_price(
+        100 * scale,
+        100 * scale,
+        1,
+        0.05,
+        0.2,
+        seed=43,
+        n_paths=2000,
+        antithetic=True,
+        control_variate=True,
+        pilot_paths=512,
+    )
+    assert_allclose(
+        [result.price, result.se, *result.ci],
+        np.array([baseline.price, baseline.se, *baseline.ci]) * scale,
+        rtol=5e-12,
+        atol=0,
+    )
+    assert_allclose(
+        [result.control_beta, result.variance_reduction],
+        [baseline.control_beta, baseline.variance_reduction],
+        rtol=5e-12,
+        atol=0,
+    )
+
+
+@pytest.mark.parametrize("antithetic,control_variate", [(True, False), (False, True), (True, True)])
+def test_reduction_preserves_deterministic_contracts(
+    antithetic: bool, control_variate: bool
+) -> None:
+    result = mc_price(
+        90,
+        100,
+        1,
+        0.05,
+        0,
+        kind="put",
+        seed=17,
+        n_paths=100,
+        antithetic=antithetic,
+        control_variate=control_variate,
+    )
+    assert result.price == bsm_price(90, 100, 1, 0.05, 0, kind="put")
+    assert result.se == 0
+    assert result.ci_status == "deterministic"
+    assert result.pilot_paths == 0
+    assert result.variance_reduction is None
+
+
+@pytest.mark.parametrize(
+    "antithetic,control_variate,n_paths,pilot_paths",
+    [
+        ("yes", False, 100, 10),
+        (False, 1, 100, 10),
+        (True, False, 2, 10),
+        (True, False, 101, 10),
+        (False, True, 100, 1),
+        (True, True, 100, 2),
+        (True, True, 100, 11),
+    ],
+)
+def test_invalid_reduction_configuration(
+    antithetic: bool, control_variate: bool, n_paths: int, pilot_paths: int
+) -> None:
+    with pytest.raises(ValueError):
+        mc_price(
+            100,
+            100,
+            1,
+            0.05,
+            0.2,
+            seed=17,
+            n_paths=n_paths,
+            antithetic=antithetic,
+            control_variate=control_variate,
+            pilot_paths=pilot_paths,
+        )
