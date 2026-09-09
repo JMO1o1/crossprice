@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Generated figures (regenerate with the documented command; commit only the ones the README cites)
+notebooks/_scratch/
+
+# OS / editor
+.DS_Store
+.vscode/
+*.swp
