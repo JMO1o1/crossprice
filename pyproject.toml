@@ -11,6 +11,9 @@ dependencies = [
     "scipy>=1.13",
 ]
 
+[project.scripts]
+crossprice-crossvalidate = "crossprice.crossvalidate:main"
+
 [project.optional-dependencies]
 plots = [
     "matplotlib>=3.9",

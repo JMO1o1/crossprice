@@ -1,11 +1,13 @@
 """crossprice — cross-validated option pricing.
 
-Three independent pricing methods, with a comparison harness planned next:
+Three independent pricing methods and the harness that makes them argue:
 
-- ``analytic``     Black–Scholes–Merton, Greeks and geometric Asian prices.
-- ``binomial``     Cox–Ross–Rubinstein tree, European and American.
-- ``montecarlo``   European and Asian GBM simulation with standard errors and CIs.
-- Planned: ``implied_vol`` and ``crossvalidate``.
+- ``analytic``      Black–Scholes–Merton, Greeks and geometric Asian prices.
+- ``binomial``      Cox–Ross–Rubinstein tree, European and American.
+- ``montecarlo``    European and Asian GBM simulation with standard errors and CIs.
+- ``crossvalidate`` Agreement table, stress cases and convergence plots
+                    (``python -m crossprice.crossvalidate``; needs pandas/matplotlib).
+- Planned: ``implied_vol``.
 
 This is a pricing and numerical-methods library.
 """

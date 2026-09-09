@@ -1,0 +1,265 @@
+{
+  "command": "uv run python -m crossprice.crossvalidate --out docs",
+  "config": {
+    "crr_steps": 1000,
+    "american_reference_steps": 6400,
+    "mc_paths": 65536,
+    "pilot_paths": 4096,
+    "asian_dates": 12,
+    "base_seed": 20260916,
+    "atol": 0.005,
+    "rtol": 0.002,
+    "exact_atol": 1e-10,
+    "exact_rtol": 1e-12,
+    "family_alpha": 0.01,
+    "se_floor_relative": 1e-12,
+    "crr_convergence_steps": [
+      50,
+      100,
+      200,
+      400,
+      800
+    ],
+    "mc_convergence_paths": [
+      1024,
+      4096,
+      16384,
+      65536
+    ],
+    "mc_convergence_seeds": 128,
+    "mc_convergence_first_seed": 1000
+  },
+  "environment": {
+    "crossprice": "0.1.0",
+    "python": "3.12.3",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "pandas": "3.0.5",
+    "matplotlib": "3.11.1"
+  },
+  "n_cases": 119,
+  "family": {
+    "n_stochastic_declared": 187,
+    "family_alpha": 0.01,
+    "z_crit": 4.039891493350063,
+    "n_z_scores": 166,
+    "mean_z": -0.08720399931708754,
+    "sd_z": 0.960731248130507,
+    "max_abs_z": 3.069659633677884,
+    "n_intervals": 166,
+    "covered_95": 158,
+    "binomial_99_band": [
+      150,
+      164
+    ],
+    "coverage_within_band": true,
+    "status_counts": {
+      "pass": 291,
+      "expected": 67,
+      "degenerate": 5
+    },
+    "outcome_counts": {
+      "agree": 291,
+      "unsupported": 62,
+      "degenerate": 9,
+      "error": 1
+    },
+    "n_rows": 363
+  },
+  "per_method": [
+    {
+      "instrument": "european",
+      "method": "crr",
+      "criteria": "exact/tolerance",
+      "rows": 89,
+      "pass": 88,
+      "expected": 1,
+      "degenerate": 0,
+      "FAIL": 0,
+      "max_abs_error": 0.014960337693764814,
+      "max_abs_rel_error": 0.8003158326651035,
+      "max_abs_z": NaN,
+      "covered_95": "n/a"
+    },
+    {
+      "instrument": "european",
+      "method": "mc_plain",
+      "criteria": "exact/z_score",
+      "rows": 88,
+      "pass": 86,
+      "expected": 1,
+      "degenerate": 1,
+      "FAIL": 0,
+      "max_abs_error": 0.2203436564560768,
+      "max_abs_rel_error": 5.674254045775486,
+      "max_abs_z": 2.3942789886766773,
+      "covered_95": "80/83"
+    },
+    {
+      "instrument": "european",
+      "method": "mc_antithetic_control",
+      "criteria": "exact/z_score",
+      "rows": 87,
+      "pass": 80,
+      "expected": 3,
+      "degenerate": 4,
+      "FAIL": 0,
+      "max_abs_error": 0.024608026898471635,
+      "max_abs_rel_error": 1.0,
+      "max_abs_z": 3.069659633677884,
+      "covered_95": "72/77"
+    },
+    {
+      "instrument": "american",
+      "method": "bsm",
+      "criteria": "n/a",
+      "rows": 25,
+      "pass": 0,
+      "expected": 25,
+      "degenerate": 0,
+      "FAIL": 0,
+      "max_abs_error": NaN,
+      "max_abs_rel_error": NaN,
+      "max_abs_z": NaN,
+      "covered_95": "n/a"
+    },
+    {
+      "instrument": "american",
+      "method": "crr_american",
+      "criteria": "tolerance",
+      "rows": 25,
+      "pass": 25,
+      "expected": 0,
+      "degenerate": 0,
+      "FAIL": 0,
+      "max_abs_error": 0.0016870185221335987,
+      "max_abs_rel_error": 0.0017528540216631922,
+      "max_abs_z": NaN,
+      "covered_95": "n/a"
+    },
+    {
+      "instrument": "american",
+      "method": "mc_plain",
+      "criteria": "n/a",
+      "rows": 25,
+      "pass": 0,
+      "expected": 25,
+      "degenerate": 0,
+      "FAIL": 0,
+      "max_abs_error": NaN,
+      "max_abs_rel_error": NaN,
+      "max_abs_z": NaN,
+      "covered_95": "n/a"
+    },
+    {
+      "instrument": "asian",
+      "method": "bsm",
+      "criteria": "n/a",
+      "rows": 6,
+      "pass": 0,
+      "expected": 6,
+      "degenerate": 0,
+      "FAIL": 0,
+      "max_abs_error": NaN,
+      "max_abs_rel_error": NaN,
+      "max_abs_z": NaN,
+      "covered_95": "n/a"
+    },
+    {
+      "instrument": "asian",
+      "method": "crr",
+      "criteria": "n/a",
+      "rows": 6,
+      "pass": 0,
+      "expected": 6,
+      "degenerate": 0,
+      "FAIL": 0,
+      "max_abs_error": NaN,
+      "max_abs_rel_error": NaN,
+      "max_abs_z": NaN,
+      "covered_95": "n/a"
+    },
+    {
+      "instrument": "asian",
+      "method": "asian_mc_geometric",
+      "criteria": "z_score",
+      "rows": 6,
+      "pass": 6,
+      "expected": 0,
+      "degenerate": 0,
+      "FAIL": 0,
+      "max_abs_error": 0.03371295626624704,
+      "max_abs_rel_error": 0.008704570647954253,
+      "max_abs_z": 1.4494853504520813,
+      "covered_95": "6/6"
+    },
+    {
+      "instrument": "asian",
+      "method": "asian_mc_arithmetic_control",
+      "criteria": "lower_bound/upper_bound",
+      "rows": 6,
+      "pass": 6,
+      "expected": 0,
+      "degenerate": 0,
+      "FAIL": 0,
+      "max_abs_error": NaN,
+      "max_abs_rel_error": NaN,
+      "max_abs_z": NaN,
+      "covered_95": "n/a"
+    }
+  ],
+  "crr_convergence": {
+    "contracts": {
+      "atm": {
+        "spot": 100.0,
+        "strike": 100.0,
+        "tau": 1.0,
+        "rate": 0.05,
+        "vol": 0.2,
+        "div": 0.0,
+        "kind": "call"
+      },
+      "off_strike": {
+        "spot": 100.0,
+        "strike": 110.0,
+        "tau": 1.0,
+        "rate": 0.05,
+        "vol": 0.2,
+        "div": 0.02,
+        "kind": "call"
+      }
+    },
+    "fitted_orders_atm": {
+      "call_even": 0.9991685678863662,
+      "call_odd": 1.00065069429893,
+      "put_even": 0.9991685678880325,
+      "put_odd": 1.0006506942880398
+    }
+  },
+  "mc_convergence": {
+    "contract": {
+      "spot": 100.0,
+      "strike": 100.0,
+      "tau": 1.0,
+      "rate": 0.05,
+      "vol": 0.2,
+      "div": 0.02,
+      "kind": "call"
+    },
+    "fitted_slopes": {
+      "call": -0.49000693734654843,
+      "put": -0.4749539738642332
+    },
+    "n_seeds": 128,
+    "first_seed": 1000
+  },
+  "artifacts": [
+    "agreement_table.csv",
+    "agreement_table.md",
+    "crossvalidation_run.json",
+    "figures/crr_convergence.png",
+    "figures/crr_convergence.csv",
+    "figures/mc_convergence.png",
+    "figures/mc_convergence.csv"
+  ]
+}
