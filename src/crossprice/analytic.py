@@ -195,3 +195,57 @@ def bsm_greeks(
         )
         rho[regular] = direction * tau[regular] * discounted_strike[regular] * cdf2
     return Greeks(*(_scalar_or_array(value) for value in (delta, gamma, vega, theta, rho)))
+
+
+def geometric_asian_price(
+    spot: float,
+    strike: float,
+    tau: float,
+    rate: float,
+    vol: float,
+    div: float = 0.0,
+    kind: OptionKind = "call",
+    *,
+    n_dates: int = 12,
+) -> float:
+    """Exact discrete geometric-average option price, paid at expiry.
+
+    Monitoring dates are j*tau/n_dates for j=1,...,n_dates: exclude today's
+    spot, include expiry, equal weights. Inputs are scalar and follow bsm_price
+    validation/units. n_dates must be a positive integer, not bool. For one
+    date this is a vanilla European option, not an Asian approximation.
+
+    The log average is Gaussian with mean log(spot)+(rate-div-vol**2/2)*mean(t)
+    and variance vol**2*sum(min(t_i,t_j))/n_dates**2. This is the discrete-date
+    lognormal derivation underlying the Kemna-Vorst geometric control, not the
+    continuous-monitoring formula. Limits are handled without dividing by zero.
+    Invalid inputs raise ValueError; unrepresentable arithmetic raises
+    FloatingPointError. Arrays of contracts are not supported here.
+    """
+    inputs = (spot, strike, tau, rate, vol, div)
+    if any(np.ndim(value) != 0 for value in inputs):
+        raise ValueError("geometric Asian pricing requires scalar contract inputs")
+    _broadcast_inputs(spot, strike, tau, rate, vol, div, kind)
+    if (
+        isinstance(n_dates, (bool, np.bool_))
+        or not isinstance(n_dates, (int, np.integer))
+        or n_dates < 1
+    ):
+        raise ValueError("n_dates must be a positive integer")
+    direction = 1.0 if kind == "call" else -1.0
+    with np.errstate(over="raise", invalid="raise", divide="raise"):
+        mean_time = tau * (1 + 1 / n_dates) / 2
+        variance_time = tau * (1 + 1 / n_dates) * (2 + 1 / n_dates) / 6
+        stddev = vol * np.sqrt(variance_time)
+        log_mean_shift = (rate - div - 0.5 * vol**2) * mean_time
+        discounted_mean = spot * np.exp(log_mean_shift - rate * tau + 0.5 * stddev**2)
+        discounted_strike = strike * np.exp(-rate * tau)
+        if stddev == 0:
+            return float(max(direction * (discounted_mean - discounted_strike), 0))
+        with np.errstate(over="ignore"):
+            d2 = (np.log(spot) - np.log(strike) + log_mean_shift) / stddev
+        d1 = d2 + stddev
+        return float(
+            direction
+            * (discounted_mean * ndtr(direction * d1) - discounted_strike * ndtr(direction * d2))
+        )

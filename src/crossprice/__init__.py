@@ -1,15 +1,13 @@
 """crossprice — cross-validated option pricing.
 
-Three independent pricing methods for vanilla options that must agree, and a
-harness that records exactly where and why they stop agreeing:
+Three independent pricing methods, with a comparison harness planned next:
 
-- ``analytic``     Black–Scholes–Merton closed form and analytic Greeks.
+- ``analytic``     Black–Scholes–Merton, Greeks and geometric Asian prices.
 - ``binomial``     Cox–Ross–Rubinstein tree, European and American.
-- ``montecarlo``   Risk-neutral GBM simulation with standard errors and CIs.
-- ``implied_vol``  Newton–Raphson with bisection fallback.
-- ``crossvalidate`` The harness that makes the methods argue.
+- ``montecarlo``   European and Asian GBM simulation with standard errors and CIs.
+- Planned: ``implied_vol`` and ``crossvalidate``.
 
-This is a pricing and numerical-methods library. It contains no trading logic.
+This is a pricing and numerical-methods library.
 """
 
 from __future__ import annotations

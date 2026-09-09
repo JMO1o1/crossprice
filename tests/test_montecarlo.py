@@ -7,8 +7,62 @@ import pytest
 from numpy.testing import assert_allclose
 from scipy.stats import binom, norm
 
-from crossprice.analytic import FloatArray, OptionKind, bsm_price
-from crossprice.montecarlo import MCResult, mc_price
+from crossprice.analytic import FloatArray, OptionKind, bsm_price, geometric_asian_price
+from crossprice.montecarlo import AverageKind, MCResult, asian_mc_price, mc_price
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+@pytest.mark.parametrize("n_dates", [1, 2, 12, 52])
+def test_geometric_asian_formula_against_covariance_sum(kind: OptionKind, n_dates: int) -> None:
+    spot, strike, tau, rate, vol, div = 100, 105, 1.5, 0.04, 0.3, 0.02
+    dates = np.linspace(tau / n_dates, tau, n_dates)
+    log_mean = np.log(spot) + (rate - div - 0.5 * vol**2) * dates.mean()
+    variance = vol**2 * np.minimum.outer(dates, dates).mean()
+    direction = 1 if kind == "call" else -1
+    standardised = (log_mean - np.log(strike)) / np.sqrt(variance)
+    expected = (
+        np.exp(-rate * tau)
+        * direction
+        * (
+            np.exp(log_mean + 0.5 * variance)
+            * norm.cdf(direction * (standardised + np.sqrt(variance)))
+            - strike * norm.cdf(direction * standardised)
+        )
+    )
+    actual = geometric_asian_price(spot, strike, tau, rate, vol, div, kind, n_dates=n_dates)
+    assert_allclose(actual, expected, rtol=0, atol=2e-12)
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+@pytest.mark.parametrize("tau,vol", [(1, 0.2), (1, 0), (0, 0.2), (0.1, 0.8)])
+def test_single_date_geometric_asian_is_vanilla(kind: OptionKind, tau: float, vol: float) -> None:
+    actual = geometric_asian_price(100, 105, tau, -0.02, vol, 0.03, kind, n_dates=1)
+    assert_allclose(actual, bsm_price(100, 105, tau, -0.02, vol, 0.03, kind), rtol=0, atol=2e-12)
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+def test_geometric_asian_price_parity_and_deterministic_limit(kind: OptionKind) -> None:
+    n_dates, tau, rate, div = 12, 2, 0.05, 0.02
+    dates = np.linspace(tau / n_dates, tau, n_dates)
+    deterministic_geometric = np.exp(np.mean(np.log(100) + (rate - div) * dates))
+    direction = 1 if kind == "call" else -1
+    expected = np.exp(-rate * tau) * max(direction * (deterministic_geometric - 105), 0)
+    assert_allclose(
+        geometric_asian_price(100, 105, tau, rate, 0, div, kind, n_dates=n_dates),
+        expected,
+        rtol=0,
+        atol=2e-12,
+    )
+    log_mean = np.log(100) + (rate - div - 0.5 * 0.3**2) * dates.mean()
+    variance = 0.3**2 * np.minimum.outer(dates, dates).mean()
+    call = geometric_asian_price(100, 105, tau, rate, 0.3, div, "call", n_dates=n_dates)
+    put = geometric_asian_price(100, 105, tau, rate, 0.3, div, "put", n_dates=n_dates)
+    assert_allclose(
+        call - put,
+        np.exp(-rate * tau) * (np.exp(log_mean + 0.5 * variance) - 105),
+        rtol=0,
+        atol=2e-12,
+    )
 
 
 @pytest.mark.parametrize("kind", ["call", "put"])
@@ -495,3 +549,399 @@ def test_invalid_reduction_configuration(
             control_variate=control_variate,
             pilot_paths=pilot_paths,
         )
+
+
+def _replay_asian_samples(
+    seed: int | np.random.SeedSequence,
+    n_paths: int,
+    n_dates: int,
+    antithetic: bool,
+    kind: OptionKind = "call",
+) -> tuple[FloatArray, FloatArray]:
+    n_samples = n_paths // 2 if antithetic else n_paths
+    normals = np.random.default_rng(seed).standard_normal((n_dates, n_samples))
+    normals = np.stack((normals, -normals)) if antithetic else normals[None, :, :]
+    increments = (0.05 - 0.02 - 0.5 * 0.2**2) / n_dates + 0.2 / np.sqrt(n_dates) * normals
+    paths = 100 * np.exp(np.cumsum(increments, axis=1))
+    direction = 1 if kind == "call" else -1
+    arithmetic = np.exp(-0.05) * np.maximum(direction * (np.mean(paths, axis=1) - 100), 0)
+    geometric = np.exp(-0.05) * np.maximum(
+        direction * (np.exp(np.mean(np.log(paths), axis=1)) - 100), 0
+    )
+    return arithmetic, geometric
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+@pytest.mark.parametrize("average", ["arithmetic", "geometric"])
+@pytest.mark.parametrize("antithetic", [False, True])
+def test_asian_streaming_matches_dense_path_replay(
+    kind: OptionKind, average: AverageKind, antithetic: bool
+) -> None:
+    result = asian_mc_price(
+        100,
+        100,
+        1,
+        0.05,
+        0.2,
+        0.02,
+        kind,
+        seed=29,
+        n_paths=4096,
+        n_dates=12,
+        average=average,
+        antithetic=antithetic,
+    )
+    arithmetic, geometric = _replay_asian_samples(29, 4096, 12, antithetic, kind)
+    observations = np.mean(arithmetic if average == "arithmetic" else geometric, axis=0)
+    assert_allclose(result.price, np.mean(observations), rtol=0, atol=1e-12)
+    assert_allclose(
+        result.se, np.std(observations, ddof=1) / np.sqrt(observations.size), rtol=0, atol=1e-13
+    )
+    assert result.n_dates == 12
+    assert result.average == average
+    assert result.n_samples == observations.size
+
+
+@pytest.mark.parametrize("antithetic", [False, True])
+def test_asian_geometric_control_uses_matching_discrete_expectation(antithetic: bool) -> None:
+    seed, n_paths, n_dates, pilot_paths = 33, 4096, 12, 1024
+    result = asian_mc_price(
+        100,
+        100,
+        1,
+        0.05,
+        0.2,
+        0.02,
+        seed=seed,
+        n_paths=n_paths,
+        n_dates=n_dates,
+        antithetic=antithetic,
+        control_variate=True,
+        pilot_paths=pilot_paths,
+    )
+    raw_payoffs, raw_controls = _replay_asian_samples(seed, n_paths, n_dates, antithetic)
+    pilot_payoffs, pilot_controls = _replay_asian_samples(
+        np.random.SeedSequence(seed, spawn_key=(1,)), pilot_paths, n_dates, antithetic
+    )
+    pilot_payoffs, pilot_controls = np.mean(pilot_payoffs, axis=0), np.mean(pilot_controls, axis=0)
+    beta = np.cov(pilot_controls, pilot_payoffs, ddof=1)[0, 1] / np.var(pilot_controls, ddof=1)
+    expected_control = geometric_asian_price(100, 100, 1, 0.05, 0.2, 0.02, n_dates=n_dates)
+    corrected = np.mean(raw_payoffs, axis=0) - beta * (
+        np.mean(raw_controls, axis=0) - expected_control
+    )
+    assert_allclose(result.control_beta, beta, rtol=0, atol=1e-12)
+    assert_allclose(result.price, np.mean(corrected), rtol=0, atol=1e-12)
+    assert_allclose(
+        result.se, np.std(corrected, ddof=1) / np.sqrt(corrected.size), rtol=0, atol=1e-13
+    )
+    assert result.total_paths == n_paths + pilot_paths
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+def test_geometric_asian_mc_coverage(kind: OptionKind) -> None:
+    reference = geometric_asian_price(100, 100, 1, 0.05, 0.2, 0.02, kind, n_dates=12)
+    results = [
+        asian_mc_price(
+            100,
+            100,
+            1,
+            0.05,
+            0.2,
+            0.02,
+            kind,
+            seed=seed,
+            n_paths=4096,
+            n_dates=12,
+            average="geometric",
+        )
+        for seed in range(200)
+    ]
+    covered = sum(result.ci_low <= reference <= result.ci_high for result in results)
+    lower, upper = binom.interval(1 - 0.01 / 2, 200, 0.95)
+    assert lower <= covered <= upper
+    print(
+        f"geometric Asian {kind}: exact={reference:.12f}, coverage={covered}/200 "
+        f"in [{lower:.0f},{upper:.0f}]"
+    )
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        (100, 100, 1, 0.05, 0.2, 0.02),
+        (120, 100, 1, 0.01, 0.2, 0.1),
+        (100, 120, 2, -0.02, 0.3, 0.03),
+    ],
+)
+def test_asian_am_gm_and_jensen_bounds(kind: OptionKind, inputs: tuple[float, ...]) -> None:
+    spot, strike, tau, rate, vol, div = inputs
+    n_dates = 12
+    arithmetic = asian_mc_price(
+        *inputs, kind=kind, seed=121, n_paths=32768, n_dates=n_dates, antithetic=True
+    )
+    geometric = asian_mc_price(
+        *inputs,
+        kind=kind,
+        seed=121,
+        n_paths=32768,
+        n_dates=n_dates,
+        average="geometric",
+        antithetic=True,
+    )
+    exact_geometric = geometric_asian_price(*inputs, kind=kind, n_dates=n_dates)
+    if kind == "call":
+        assert arithmetic.price >= geometric.price - 1e-12
+        assert arithmetic.price + 4 * arithmetic.se >= exact_geometric
+    else:
+        assert arithmetic.price <= geometric.price + 1e-12
+        assert arithmetic.price - 4 * arithmetic.se <= exact_geometric
+    dates = np.linspace(tau / n_dates, tau, n_dates)
+    convexity_upper = np.mean(
+        np.exp(-rate * (tau - dates)) * bsm_price(spot, strike, dates, rate, vol, div, kind)
+    )
+    discounted_mean = np.mean(spot * np.exp((rate - div) * dates - rate * tau))
+    direction = 1 if kind == "call" else -1
+    lower_bound = max(direction * (discounted_mean - strike * np.exp(-rate * tau)), 0)
+    assert arithmetic.price - 4 * arithmetic.se <= convexity_upper
+    assert arithmetic.price + 4 * arithmetic.se >= lower_bound
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+def test_asian_terminal_bound_when_spot_is_a_martingale(kind: OptionKind) -> None:
+    result = asian_mc_price(
+        100,
+        100,
+        1,
+        0.03,
+        0.2,
+        0.03,
+        kind,
+        seed=92,
+        n_paths=32768,
+        n_dates=12,
+        antithetic=True,
+        control_variate=True,
+    )
+    vanilla = bsm_price(100, 100, 1, 0.03, 0.2, 0.03, kind)
+    assert result.price + 4 * result.se < vanilla
+
+
+def test_asian_not_unconditionally_bounded_by_terminal_vanilla() -> None:
+    result = asian_mc_price(120, 100, 1, 0, 0, 0.1, seed=1, n_paths=4, n_dates=12)
+    vanilla = bsm_price(120, 100, 1, 0, 0, 0.1)
+    assert result.price > vanilla + 1
+    assert result.se == 0
+    assert result.ci_status == "deterministic"
+    print(f"terminal-bound counterexample: Asian={result}; vanilla={vanilla:.12f}")
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+@pytest.mark.parametrize("antithetic", [False, True])
+def test_asian_control_empirical_variance_and_mean(kind: OptionKind, antithetic: bool) -> None:
+    controlled, plain, reported_se = [], [], []
+    for seed in range(128):
+        result = asian_mc_price(
+            100,
+            100,
+            1,
+            0.05,
+            0.2,
+            0.02,
+            kind,
+            seed=seed,
+            n_paths=4096,
+            n_dates=12,
+            antithetic=antithetic,
+            control_variate=True,
+            pilot_paths=1024,
+        )
+        baseline = asian_mc_price(
+            100, 100, 1, 0.05, 0.2, 0.02, kind, seed=seed, n_paths=result.total_paths, n_dates=12
+        )
+        controlled.append(result.price)
+        plain.append(baseline.price)
+        reported_se.append(result.se)
+    paired_differences = np.array(controlled) - np.array(plain)
+    difference_se = np.std(paired_differences, ddof=1) / np.sqrt(len(controlled))
+    factor = np.var(plain, ddof=1) / np.var(controlled, ddof=1)
+    calibration = np.std(controlled, ddof=1) / np.mean(reported_se)
+    assert abs(np.mean(paired_differences)) < 4 * difference_se
+    assert factor > 10
+    assert 0.7 < calibration < 1.3
+    print(
+        f"Asian {kind} anti={antithetic}: equal-cost empirical VR={factor:.6f}, "
+        f"SD/SE={calibration:.6f}, "
+        f"mean-difference z={np.mean(paired_differences) / difference_se:.6f}"
+    )
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+def test_asian_showcase_reports_uncertainty_and_reduction(kind: OptionKind) -> None:
+    result = asian_mc_price(
+        100,
+        100,
+        1,
+        0.05,
+        0.2,
+        0.02,
+        kind,
+        seed=20260914,
+        n_paths=65536,
+        n_dates=12,
+        antithetic=True,
+        control_variate=True,
+        pilot_paths=4096,
+    )
+    baseline = asian_mc_price(
+        100, 100, 1, 0.05, 0.2, 0.02, kind, seed=20260915, n_paths=result.total_paths, n_dates=12
+    )
+    geometric = geometric_asian_price(100, 100, 1, 0.05, 0.2, 0.02, kind, n_dates=12)
+    assert abs(result.price - baseline.price) < 4 * np.hypot(result.se, baseline.se)
+    assert result.se < baseline.se
+    assert result.variance_reduction > 10
+    assert result == asian_mc_price(
+        100,
+        100,
+        1,
+        0.05,
+        0.2,
+        0.02,
+        kind,
+        seed=20260914,
+        n_paths=65536,
+        n_dates=12,
+        antithetic=True,
+        control_variate=True,
+        pilot_paths=4096,
+    )
+    print(f"Asian {kind}: {result}; exact geometric={geometric:.12f}; plain={baseline}")
+
+
+def test_monitoring_frequency_is_a_contract_parameter() -> None:
+    counts = np.array([4, 12, 24, 48, 96])
+    geometric_prices, arithmetic_results = [], []
+    for n_dates in counts:
+        result = asian_mc_price(
+            100,
+            100,
+            1,
+            0.05,
+            0.2,
+            0.02,
+            seed=20260914,
+            n_paths=32768,
+            n_dates=n_dates,
+            antithetic=True,
+            control_variate=True,
+            pilot_paths=2048,
+        )
+        geometric = geometric_asian_price(100, 100, 1, 0.05, 0.2, 0.02, n_dates=n_dates)
+        assert result.price + 4 * result.se >= geometric
+        geometric_prices.append(geometric)
+        arithmetic_results.append(result)
+        print(f"monitoring m={n_dates}: arithmetic={result}; exact geometric={geometric:.12f}")
+    log_shift, variance = (0.05 - 0.02 - 0.5 * 0.2**2) / 2, 0.2**2 / 3
+    argument = log_shift / np.sqrt(variance)
+    continuous_geometric = (
+        100
+        * np.exp(-0.05)
+        * (
+            np.exp(log_shift + 0.5 * variance) * norm.cdf(argument + np.sqrt(variance))
+            - norm.cdf(argument)
+        )
+    )
+    errors = np.array(geometric_prices) - continuous_geometric
+    order = -np.polyfit(np.log(counts), np.log(errors), 1)[0]
+    assert 0.85 < order < 1.15
+    assert abs(arithmetic_results[-1].price - arithmetic_results[-2].price) < 0.08
+    print(
+        f"continuous geometric={continuous_geometric:.12f}, monitoring order={order:.6f}; "
+        "arithmetic intervals exclude monitoring error"
+    )
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+@pytest.mark.parametrize("average", ["arithmetic", "geometric"])
+@pytest.mark.parametrize("antithetic", [False, True])
+def test_one_monitoring_date_reproduces_vanilla_mc(
+    kind: OptionKind, average: AverageKind, antithetic: bool
+) -> None:
+    asian = asian_mc_price(
+        100,
+        100,
+        1,
+        0.05,
+        0.2,
+        0.02,
+        kind,
+        seed=52,
+        n_paths=4096,
+        n_dates=1,
+        average=average,
+        antithetic=antithetic,
+    )
+    vanilla = mc_price(
+        100, 100, 1, 0.05, 0.2, 0.02, kind, seed=52, n_paths=4096, antithetic=antithetic
+    )
+    assert_allclose(
+        [asian.price, asian.se, *asian.ci],
+        [vanilla.price, vanilla.se, *vanilla.ci],
+        rtol=0,
+        atol=1e-12,
+    )
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+def test_one_date_perfect_geometric_control_is_explicitly_exact(kind: OptionKind) -> None:
+    result = asian_mc_price(
+        100, 100, 1, 0.05, 0.2, 0.02, kind, seed=52, n_paths=4096, n_dates=1, control_variate=True
+    )
+    assert_allclose(result.price, bsm_price(100, 100, 1, 0.05, 0.2, 0.02, kind), rtol=0, atol=1e-12)
+    assert result.se == 0
+    assert result.ci == (result.price, result.price)
+    assert result.ci_status == "deterministic"
+    assert result.pilot_paths == 0
+    assert result.control_beta == 1
+    assert result.baseline_se is None
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+@pytest.mark.parametrize("average", ["arithmetic", "geometric"])
+@pytest.mark.parametrize("tau,vol", [(0, 0), (0, 0.2), (1, 0)])
+def test_asian_deterministic_limits(
+    kind: OptionKind, average: AverageKind, tau: float, vol: float
+) -> None:
+    dates = np.linspace(tau / 12, tau, 12)
+    path = 105 * np.exp((0.03 - 0.07) * dates)
+    average_spot = np.mean(path) if average == "arithmetic" else np.exp(np.mean(np.log(path)))
+    direction = 1 if kind == "call" else -1
+    expected = np.exp(-0.03 * tau) * max(direction * (average_spot - 100), 0)
+    result = asian_mc_price(
+        105, 100, tau, 0.03, vol, 0.07, kind, seed=52, n_paths=4, n_dates=12, average=average
+    )
+    assert_allclose(result.price, expected, rtol=0, atol=1e-12)
+    assert result.se == 0
+    assert result.ci_status == "deterministic"
+
+
+@pytest.mark.parametrize("n_dates", [0, -1, 1.5, True])
+def test_invalid_asian_monitoring_count(n_dates: int) -> None:
+    with pytest.raises(ValueError, match="n_dates"):
+        asian_mc_price(100, 100, 1, 0.05, 0.2, seed=1, n_dates=n_dates)
+    with pytest.raises(ValueError, match="n_dates"):
+        geometric_asian_price(100, 100, 1, 0.05, 0.2, n_dates=n_dates)
+
+
+def test_invalid_asian_average_or_tautological_control() -> None:
+    with pytest.raises(ValueError, match="average"):
+        asian_mc_price(100, 100, 1, 0.05, 0.2, seed=1, average="invalid")
+    with pytest.raises(ValueError, match="geometric"):
+        asian_mc_price(100, 100, 1, 0.05, 0.2, seed=1, average="geometric", control_variate=True)
+
+
+def test_asian_rare_payoff_is_flagged() -> None:
+    with pytest.warns(RuntimeWarning, match="degenerate"):
+        result = asian_mc_price(100, 1000, 1, 0, 0.2, seed=17, n_paths=1000)
+    assert result.ci_status == "degenerate"
+    assert result.variance_reduction is None
