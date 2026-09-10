@@ -8,6 +8,7 @@ Three independent pricing methods and the harness that makes them argue:
 - ``crossvalidate`` Agreement table, stress cases and convergence plots
                     (``python -m crossprice.crossvalidate``; needs pandas/matplotlib).
 - ``implied_vol``   BSM inversion, safeguarded Newton and bracketed Brent fallback.
+- ``surface``       Offline SPX snapshot cleaning, observed IV smile and sensitivities.
 
 This is a pricing and numerical-methods library.
 """
