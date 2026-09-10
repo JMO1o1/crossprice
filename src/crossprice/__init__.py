@@ -7,7 +7,7 @@ Three independent pricing methods and the harness that makes them argue:
 - ``montecarlo``    European and Asian GBM simulation with standard errors and CIs.
 - ``crossvalidate`` Agreement table, stress cases and convergence plots
                     (``python -m crossprice.crossvalidate``; needs pandas/matplotlib).
-- Planned: ``implied_vol``.
+- ``implied_vol``   BSM inversion, safeguarded Newton and bracketed Brent fallback.
 
 This is a pricing and numerical-methods library.
 """
