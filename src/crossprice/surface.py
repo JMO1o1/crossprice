@@ -218,7 +218,8 @@ def screen_static_arbitrage(
     Calls decrease, puts increase; vertical slopes are bounded by exp(-r*T),
     and successive secant slopes on the actual unequal strike grid increase.
     For the first violation remove the involved quote with widest relative
-    spread, tie-break by symbol. This deterministic heuristic is not a maximum
+    spread; equal spreads remove the lexicographically last option symbol.
+    This deterministic heuristic is not a maximum
     clean subset or a bid/ask-feasibility optimization. No midpoint is repaired.
     The tolerance is 1e-8 in price differences / dimensionless secant slopes.
     """

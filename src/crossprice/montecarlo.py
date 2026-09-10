@@ -25,8 +25,8 @@ class MCResult:
     'degenerate' means no variation was observed in a stochastic sample; that
     interval is not evidence of zero uncertainty. 'deterministic' denotes an
     exact evaluation without sampling error (including a known perfect control).
-    n_paths counts requested main
-    payoff evaluations, n_samples independent observations used for the SE.
+    n_paths counts requested main payoff evaluations, n_samples independent
+    observations used for the SE.
     pilot_paths records extra coefficient-fitting evaluations. baseline_se is
     the estimated plain-MC SE at total_paths; variance_reduction is its squared
     ratio to se, or None when either empirical variance is unresolved/zero.
@@ -125,7 +125,7 @@ def _summarize(observations: FloatArray, *, n_paths: int, seed: int) -> MCResult
             "No sample variation: the normal confidence interval is degenerate "
             "and may miss rare events",
             RuntimeWarning,
-            stacklevel=3,
+            stacklevel=4,
         )
     return MCResult(
         price, se, price - half_width, price + half_width, n_paths, observations.size, seed, status

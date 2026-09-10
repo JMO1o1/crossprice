@@ -26,7 +26,9 @@ type IVMethod = Literal["newton", "brent", "boundary", "bracket"]
 class IVResult:
     """An inversion result, not a claim about the precision of the input quote.
 
-    ``vol`` is absent when there is no identified finite root. ``iterations``
+    ``vol`` is ``None`` at expiry, at the upper price bound and when no bracket
+    exists; on ``max_iterations`` or ``residual_too_large`` it is the last
+    iterate, not a verified root. ``iterations``
     counts Newton evaluations plus Brent iterations, excluding bracket search.
     ``price_residual`` is BSM(vol) - price; boundary residuals use the limiting
     price. For no_bracket it is the residual at max_vol, not at a returned root.

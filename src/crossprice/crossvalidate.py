@@ -1252,18 +1252,25 @@ def write_artifacts(out_dir: Path, cases: Sequence[Case], config: HarnessConfig)
         ],
     }
     (out_dir / "crossvalidation_run.json").write_text(
-        json.dumps(record, indent=2, default=_json_default) + "\n", encoding="utf-8"
+        json.dumps(_jsonable(record), indent=2, allow_nan=False) + "\n", encoding="utf-8"
     )
     return record
 
 
-def _json_default(value: Any) -> Any:
-    if isinstance(value, (np.integer,)):
-        return int(value)
-    if isinstance(value, (np.floating, float)):
-        return None if not np.isfinite(value) else float(value)
-    if isinstance(value, (np.bool_,)):
+def _jsonable(value: Any) -> Any:
+    """Convert numpy scalars and map non-finite floats to null so the file is strict JSON."""
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, (bool, np.bool_)):
         return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        return float(value) if np.isfinite(value) else None
+    if value is None or isinstance(value, str):
+        return value
     raise TypeError(f"cannot serialise {type(value).__name__}")
 
 

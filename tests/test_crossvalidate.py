@@ -381,7 +381,9 @@ def test_main_writes_reproducible_artifacts(tmp_path: Path) -> None:
     table = pd.read_csv(tmp_path / "agreement_table.csv")
     assert tuple(table.columns) == cv.COLUMNS
     assert (table["status"] != "FAIL").all()
-    record = json.loads((tmp_path / "crossvalidation_run.json").read_text())
+    text = (tmp_path / "crossvalidation_run.json").read_text()
+    assert "NaN" not in text and "Infinity" not in text  # strict JSON: non-finite -> null
+    record = json.loads(text)
     assert record["config"]["crr_steps"] == 200 and record["family"]["n_rows"] == len(table)
     assert set(record["crr_convergence"]["fitted_orders_atm"]) == {
         "call_even",

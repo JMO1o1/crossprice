@@ -1,4 +1,4 @@
-"""Smoke test: the package imports and reports a version. Replaced by real tests in step 1."""
+"""Smoke test: the package imports and reports a version."""
 
 from __future__ import annotations
 
